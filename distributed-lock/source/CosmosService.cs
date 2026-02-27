@@ -1,12 +1,13 @@
-﻿using Cosmos_Patterns_GlobalLock;
+﻿using System.Net;
+using Azure.Core;
+using Azure.Identity;
+using Cosmos_Patterns_GlobalLock;
 using Microsoft.Azure.Cosmos;
 using Microsoft.Extensions.Configuration;
-using System.Net;
 using Container = Microsoft.Azure.Cosmos.Container;
 
 namespace CosmosDistributedLock.Services
 {
-
     public class CosmosService
     {
         private Container? _container;
@@ -20,45 +21,66 @@ namespace CosmosDistributedLock.Services
         public async Task InitDatabaseAsync()
         {
             string uri = _configuration["CosmosUri"]!;
-            string key = _configuration["CosmosKey"]!;
+            //
+            // string databaseName = _configuration["CosmosDatabase"]!;
+            // string containerName = _configuration["CosmosContainer"]!;
+
+            // Database database = await client.CreateDatabaseIfNotExistsAsync(databaseName);
+
+            // ContainerProperties containerProperties = new()
+            // {
+            //     Id = containerName,
+            //     PartitionKeyPath = "/cosmosDoc_partitionKey",
+            //     DefaultTimeToLive = 60, //seconds
+            // };
+
+            // _container = await database.CreateContainerIfNotExistsAsync(containerProperties);
+            // _container = databse.GetContainer(containerName);
+            //
+            // string uri = _configuration["CosmosUri"]!;
+
+            // DefaultAzureCredential will automatically pick up your signed-in
+            // identity (Visual Studio/Azure CLI) locally or the Managed Identity in Azure.
+            DefaultAzureCredential credential = new();
+
+            // Pass the URI and the credential to the CosmosClient constructor
+            CosmosClient client = new(uri, credential);
 
             string databaseName = _configuration["CosmosDatabase"]!;
             string containerName = _configuration["CosmosContainer"]!;
 
-            CosmosClient client = new(
-                accountEndpoint: uri,
-                authKeyOrResourceToken: key);
+            Database database = client.GetDatabase(databaseName);
 
-            Database database = await client.CreateDatabaseIfNotExistsAsync(databaseName);
+            // Database database = await client.CreateDatabaseIfNotExistsAsync(databaseName);
+            //
+            // ContainerProperties containerProperties = new()
+            // {
+            //     Id = containerName,
+            //     PartitionKeyPath = "/cosmosDoc_partitionKey",
+            //     DefaultTimeToLive = 60, // seconds
+            // };
 
-            ContainerProperties containerProperties = new ()
-            {
-                Id = containerName,
-                PartitionKeyPath = "/id",
-                DefaultTimeToLive = 60  //seconds
-            };
-            
-            _container = await database.CreateContainerIfNotExistsAsync(containerProperties);
+            // _container = await database.CreateContainerIfNotExistsAsync(containerProperties);
+            _container = database.GetContainer(id: containerName);
         }
 
         public async Task<Lease> CreateUpdateLeaseAsync(string ownerId, int leaseDuration)
         {
-
-            Lease lease = new Lease { OwnerId = ownerId, LeaseDuration = leaseDuration };
+            Lease lease = new Lease { OwnerId = ownerId, LeaseDuration = leaseDuration, cosmosDoc_partitionKey = ownerId };
 
             return await _container.UpsertItemAsync(lease, new PartitionKey(ownerId));
-
         }
 
         public async Task<Lease> ReadLeaseAsync(string ownerId)
         {
-
             Lease lease;
 
             try
             {
-                lease = await _container.ReadItemAsync<Lease>(id: ownerId, new PartitionKey(ownerId));
-
+                lease = await _container.ReadItemAsync<Lease>(
+                    id: ownerId,
+                    new PartitionKey(ownerId)
+                );
             }
             catch (CosmosException ce)
             {
@@ -74,7 +96,6 @@ namespace CosmosDistributedLock.Services
             }
 
             return lease;
-
         }
 
         public async Task<DistributedLock> ReadLockAsync(string lockName)
@@ -84,7 +105,7 @@ namespace CosmosDistributedLock.Services
             try
             {
                 returnLock = await _container.ReadItemAsync<DistributedLock>(
-                    id: lockName, 
+                    id: lockName,
                     partitionKey: new PartitionKey(lockName)
                 );
             }
@@ -105,11 +126,16 @@ namespace CosmosDistributedLock.Services
 
         public async Task<long> CreateNewLockAsync(string lockName, string ownerId)
         {
-
             //New Lock start with 1 for fence token to monotonically increment forever.
             long fenceToken = 1;
 
-            DistributedLock newLock = new DistributedLock { LockName = lockName, OwnerId = ownerId, FenceToken = fenceToken };
+            DistributedLock newLock = new DistributedLock
+            {
+                LockName = lockName,
+                OwnerId = ownerId,
+                FenceToken = fenceToken,
+                cosmosDoc_partitionKey = lockName,
+            };
 
             try
             {
@@ -122,7 +148,6 @@ namespace CosmosDistributedLock.Services
             }
 
             return fenceToken;
-
         }
 
         public async Task<DistributedLock> UpdateLockAsync(DistributedLock distributedLock)
@@ -134,18 +159,19 @@ namespace CosmosDistributedLock.Services
                 // Take the lock
                 List<PatchOperation> operations = new()
                 {
-                    PatchOperation.Set($"/OwnerId", distributedLock.OwnerId),
-                    PatchOperation.Increment($"/FenceToken",1)
+                    PatchOperation.Set("/OwnerId", distributedLock.OwnerId),
+                    PatchOperation.Increment("/FenceToken", 1),
                 };
 
-                updatedLock = await _container.PatchItemAsync<DistributedLock>(
-                    id: distributedLock.LockName, 
-                    partitionKey: new PartitionKey(distributedLock.LockName), 
-                    patchOperations: operations, 
-                    requestOptions: new PatchItemRequestOptions { IfMatchEtag = distributedLock.ETag}
+                return await _container.PatchItemAsync<DistributedLock>(
+                    id: distributedLock.LockName,
+                    partitionKey: new PartitionKey(distributedLock.LockName),
+                    patchOperations: operations,
+                    requestOptions: new PatchItemRequestOptions
+                    {
+                        IfMatchEtag = distributedLock.ETag,
+                    }
                 );
-
-                return updatedLock;
             }
             catch (CosmosException e)
             {
@@ -153,19 +179,20 @@ namespace CosmosDistributedLock.Services
                 {
                     //Someone aleady got the lock. Swallow exception
                     return await ReadLockAsync(distributedLock.LockName);
-
                 }
                 else
-                {   //some other error 
+                { //some other error
                     throw new Exception("Error updating Lock");
                 }
             }
-
         }
 
         internal async Task DeleteLeaseAsync(string ownerId)
         {
-            await _container.DeleteItemAsync<Lease>(id: ownerId, partitionKey: new PartitionKey(ownerId));
+            await _container.DeleteItemAsync<Lease>(
+                id: ownerId,
+                partitionKey: new PartitionKey(ownerId)
+            );
         }
     }
 }

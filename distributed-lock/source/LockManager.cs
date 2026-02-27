@@ -22,6 +22,10 @@ namespace Cosmos_Patterns_GlobalLock
         public string OwnerId { get; set; } //ownerId, ClientId
 
         public long FenceToken { get; set; } //Incrementing token
+   
+
+        public string? cosmosDoc_partitionKey;
+
     }
 
     public class Lease
@@ -34,6 +38,8 @@ namespace Cosmos_Patterns_GlobalLock
 
         [JsonProperty("_ts")]
         public long Ts { get; set; }
+
+        public string? cosmosDoc_partitionKey;
 
     }
 

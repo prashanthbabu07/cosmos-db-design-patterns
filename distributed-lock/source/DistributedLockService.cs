@@ -3,24 +3,17 @@ using Microsoft.Extensions.Configuration;
 
 namespace CosmosDistributedLock.Services
 {
-    public record LeaseRequestStatus
-      (
-        long fenceToken,
-        string currentOwner
-      );
+    public record LeaseRequestStatus(long fenceToken, string currentOwner);
 
-    public class DistributedLockService 
+    public class DistributedLockService
     {
-
         private readonly CosmosService cosmos;
         private readonly int retryInterval;
 
         public DistributedLockService(IConfiguration configuration)
         {
-
             cosmos = new CosmosService(configuration);
-            retryInterval = Convert.ToInt32(configuration["retryInterval"]);           
-
+            retryInterval = Convert.ToInt32(configuration["retryInterval"]);
         }
 
         public async Task InitDatabaseAsync()
@@ -33,73 +26,79 @@ namespace CosmosDistributedLock.Services
             // warm up SDK
             var distributedLock = await cosmos.ReadLockAsync(lockName);
         }
-        
-        public async Task<LeaseRequestStatus> AcquireLeaseAsync(string lockName, string newOwnerId, int leaseDuration, long existingFenceToken)
-        {
 
+        public async Task<LeaseRequestStatus> AcquireLeaseAsync(
+            string lockName,
+            string newOwnerId,
+            int leaseDuration,
+            long existingFenceToken
+        )
+        {
             DistributedLock distributedLock;
             DistributedLock updatedDistributedLock;
             long newFenceToken;
 
-    
             // #1: Find the lock
             distributedLock = // #1: Find the lock
             distributedLock = await cosmos.ReadLockAsync(lockName);
 
             if (distributedLock == null)
             {
-
                 // #2: Lock doesn't exist. Create a new lease and lock. All Done.
                 await CreateUpdateLeaseAsync(newOwnerId, leaseDuration);
-                                
+
                 newFenceToken = await CreateNewLockAsync(lockName, newOwnerId);
 
                 if (newFenceToken != -1)
                 {
                     //Return the fence token for the new lock with new lease //can maybe remove this after all conditions
                     return new LeaseRequestStatus(newFenceToken, newOwnerId);
-
                 }
                 else
                 {
-                    //return blank fence token    
+                    //return blank fence token
                     return new LeaseRequestStatus(-1, "");
                 }
             }
             else
             {
                 //#3. Found the lock. Is this the owner or no owner?
-                if (newOwnerId == distributedLock.OwnerId || string.IsNullOrEmpty(distributedLock.OwnerId))
+                if (
+                    newOwnerId == distributedLock.OwnerId
+                    || string.IsNullOrEmpty(distributedLock.OwnerId)
+                )
                 {
                     //Is owner, renew the lease. (Does using upsert matter? Maybe reduces round trips if Lease has expired?)
                     await CreateUpdateLeaseAsync(newOwnerId, leaseDuration);
 
-                    
                     //update the fencetoken...
 
                     updatedDistributedLock = await AcquireLockAsync(distributedLock, newOwnerId);
                     newFenceToken = updatedDistributedLock.FenceToken;
 
                     return new LeaseRequestStatus(newFenceToken, updatedDistributedLock.OwnerId);
-                    
                 }
-                else if(!string.IsNullOrEmpty(distributedLock.OwnerId))
+                else if (!string.IsNullOrEmpty(distributedLock.OwnerId))
                 {
-
                     //#4. Not the owner. See if there is a valid Lease for this owner
                     bool isValidLease = await IsValidLeaseAsync(distributedLock.OwnerId);
 
                     if (!isValidLease)
-                    {                            // #5. No Valid Lease by current listed owner.
-
-                            //Create a new lease for owner
-                            await CreateUpdateLeaseAsync(newOwnerId, leaseDuration);
+                    { // #5. No Valid Lease by current listed owner.
+                        //Create a new lease for owner
+                        await CreateUpdateLeaseAsync(newOwnerId, leaseDuration);
 
                         //Take the lock, Return the new fence token for the lock with new lease
-                         updatedDistributedLock = await AcquireLockAsync(distributedLock, newOwnerId);
+                        updatedDistributedLock = await AcquireLockAsync(
+                            distributedLock,
+                            newOwnerId
+                        );
                         newFenceToken = updatedDistributedLock.FenceToken;
 
-                        return new LeaseRequestStatus(newFenceToken, updatedDistributedLock.OwnerId);
+                        return new LeaseRequestStatus(
+                            newFenceToken,
+                            updatedDistributedLock.OwnerId
+                        );
                     }
                     else
                     {
@@ -107,15 +106,16 @@ namespace CosmosDistributedLock.Services
                         updatedDistributedLock = await ReadLockAsync(distributedLock.LockName);
                         newFenceToken = updatedDistributedLock.FenceToken;
 
-                        return new LeaseRequestStatus(newFenceToken, updatedDistributedLock.OwnerId);
+                        return new LeaseRequestStatus(
+                            newFenceToken,
+                            updatedDistributedLock.OwnerId
+                        );
                     }
                 }
-
             }
 
-            //return blank fence token, should never come here    
+            //return blank fence token, should never come here
             return new LeaseRequestStatus(-1, "");
-
         }
 
         public async Task<bool> ValidateLeaseAsync(string lockName, string ownerId, long fenceToken)
@@ -127,7 +127,7 @@ namespace CosmosDistributedLock.Services
 
             //Lock doesn't exista
 
-            if(distributedLock == null)
+            if (distributedLock == null)
                 return false;
 
             //newer fence token later avilable in lock
@@ -154,21 +154,23 @@ namespace CosmosDistributedLock.Services
 
             return false;
         }
-        
+
         //public async Task ReleaseLeaseAsync(string ownerId)
         //{
         //    await ReleaseLeaseAsync(ownerId);
-        //}        
+        //}
 
         private async Task<long> CreateNewLockAsync(string lockName, string ownerId)
         {
-
             long newFenceToken = await cosmos.CreateNewLockAsync(lockName, ownerId);
 
             return newFenceToken;
         }
 
-        private async Task<DistributedLock> AcquireLockAsync(DistributedLock distributedLock, string newOwnerId) 
+        private async Task<DistributedLock> AcquireLockAsync(
+            DistributedLock distributedLock,
+            string newOwnerId
+        )
         {
             distributedLock.OwnerId = newOwnerId;
             //distributedLock.FenceToken += 1;
@@ -185,15 +187,16 @@ namespace CosmosDistributedLock.Services
 
         private async Task CreateUpdateLeaseAsync(string ownerId, int leaseDuration)
         {
-
             var lease = await cosmos.CreateUpdateLeaseAsync(ownerId, leaseDuration);
-
         }
 
         private async Task<bool> IsValidLeaseAsync(string ownerId)
         {
             Lease lease = await cosmos.ReadLeaseAsync(ownerId);
-            if (lease != null) { return true; }
+            if (lease != null)
+            {
+                return true;
+            }
             return false;
         }
 

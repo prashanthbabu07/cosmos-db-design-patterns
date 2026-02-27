@@ -1,9 +1,9 @@
 ---
 page_type: sample
 languages:
-- csharp
+  - csharp
 products:
-- azure-cosmos-db
+  - azure-cosmos-db
 name: |
   Azure Cosmos DB design pattern: Global Distributed Lock
 urlFragment: distributed-lock
@@ -37,17 +37,16 @@ By using a distributed global lock, you can coordinate and synchronize the actio
 
 ## Sample implementation
 
-The application creates a Lock based on the Name and Time to Live( TTL) provided by the user. The Lock is created in Azure Cosmos DB and  then can be tracked by multiple geographically distributed worker threads. In this sample  the application creates 3  threads  that continuously try to get  the lock.  The worker thread holds the locks for a random number of milliseconds and then releases it. If the lock is not released with the TTL value, the lock gets released automatically.
+The application creates a Lock based on the Name and Time to Live( TTL) provided by the user. The Lock is created in Azure Cosmos DB and then can be tracked by multiple geographically distributed worker threads. In this sample the application creates 3 threads that continuously try to get the lock. The worker thread holds the locks for a random number of milliseconds and then releases it. If the lock is not released with the TTL value, the lock gets released automatically.
 ![Screenshot showing the Distributed Lock Application running](media/dlock.png)
 
-The TTL feature is used to automatically get rid of a lease object rather than having clients do the work of checking a leasedUntil date.  This takes away one step, but you are still required to check to see if two clients tried to get a lease on the same object at the same time.  This is easily done in Azure Cosmos DB via the 'etag' property on the object.
+The TTL feature is used to automatically get rid of a lease object rather than having clients do the work of checking a leasedUntil date. This takes away one step, but you are still required to check to see if two clients tried to get a lease on the same object at the same time. This is easily done in Azure Cosmos DB via the 'etag' property on the object.
 
 ## Getting the code
 
 ### Using Terminal or VS Code
 
 Directions installing pre-requisites to run locally and for cloning this repository using [Terminal or VS Code](../README.md?#getting-started)
-
 
 ### GitHub Codespaces
 
@@ -92,24 +91,58 @@ While on the Keys blade, make note of the `URI` and `PRIMARY KEY`. You will need
 1. Modify the **Copy to Output Directory** to **Copy Always** (For VS Code add the XML below to the csproj file)
 1. Save the file.
 
-  ```xml
-    <ItemGroup>
-      <Content Update="appsettings.development.json">
-        <CopyToOutputDirectory>Always</CopyToOutputDirectory>
-      </Content>
-    </ItemGroup>
-  ```
+```xml
+  <ItemGroup>
+    <Content Update="appsettings.development.json">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+```
 
 ## Run the demo locally
 
 1. At a command prompt or VS Code Terminal, switch to the `source` folder and run the app with:
 
-    ```dotnetcli
-    dotnet run
-    ```
+   ```dotnetcli
+   dotnet run
+   ```
 
 1. When prompted, enter the values for the lock name and the default TTL
 
 ## Summary
 
 Azure Cosmos DB makes implementing a global lock fairly simple by utilizing the `TTL` and 'ETag' features.
+
+```mermaid
+flowchart TD
+    A["Client requests lock\nLockTest.StartThread()"] --> B["LockManager.CreateLockAsync()"]
+    B --> C["LockManager.AcquireLeaseAsync()"]
+    C --> D["DistributedLockService.AcquireLeaseAsync()"]
+    D --> E{"CosmosService.ReadLockAsync()"}
+    E -->|DistributedLock does not exist| F["CosmosService.CreateUpdateLeaseAsync()"]
+    F --> G["CosmosService.CreateNewLockAsync()"]
+    G --> H["Return fence token and owner\nLeaseRequestStatus"]
+    E -->|DistributedLock exists| I{"Is requester current owner or no owner?"}
+    I -->|Yes| J["CosmosService.CreateUpdateLeaseAsync()"]
+    J --> K["CosmosService.UpdateLockAsync()"]
+    K --> H
+    I -->|No| L["CosmosService.ReadLeaseAsync()"]
+    L -->|Lease invalid| M["CosmosService.CreateUpdateLeaseAsync()"]
+    M --> N["CosmosService.UpdateLockAsync()"]
+    N --> H
+    L -->|Lease valid| O["Return current fence token and owner\nLeaseRequestStatus"]
+    O --> H
+
+    subgraph "Cosmos DB"
+        F
+        G
+        J
+        K
+        M
+        N
+        P["Lease document auto-deleted by TTL expiry"]
+    end
+    F -.-> P
+    J -.-> P
+    M -.-> P
+```
